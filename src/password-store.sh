@@ -12,10 +12,21 @@ export GPG_TTY="${GPG_TTY:-$(tty 2>/dev/null)}"
 which gpg2 &>/dev/null && GPG="gpg2"
 [[ -n $GPG_AGENT_INFO || $GPG == "gpg2" ]] && GPG_OPTS+=( "--batch" "--use-agent" )
 
+if [[ -r /etc/password-storerc ]]; then
+	. /etc/password-storerc
+fi
+if [[ -r $HOME/.password-storerc ]]; then
+	. $HOME/.password-storerc
+fi
+if [[ -r .password-storerc ]]; then
+	. .password-storerc
+fi
+
 PREFIX="${PASSWORD_STORE_DIR:-$HOME/.password-store}"
 X_SELECTION="${PASSWORD_STORE_X_SELECTION:-clipboard}"
 CLIP_TIME="${PASSWORD_STORE_CLIP_TIME:-45}"
 GENERATED_LENGTH="${PASSWORD_STORE_GENERATED_LENGTH:-25}"
+DEFAULT_CLIP_BEHAVIOUR="${PASSWORD_STORE_DEFAULT_CLIP:-0}"
 
 export GIT_DIR="${PASSWORD_STORE_GIT:-$PREFIX}/.git"
 export GIT_WORK_TREE="${PASSWORD_STORE_GIT:-$PREFIX}"
@@ -295,16 +306,19 @@ cmd_init() {
 }
 
 cmd_show() {
-	local opts clip_location clip=0
-	opts="$($GETOPT -o c:: -l clip:: -n "$PROGRAM" -- "$@")"
+	local opts clip_location=1
+	local clip=$DEFAULT_CLIP_BEHAVIOUR
+	opts="$($GETOPT -o "c:: s e::" -l "clip:: show extended-clip::" -n "$PROGRAM" -- "$@")"
 	local err=$?
 	eval set -- "$opts"
 	while true; do case $1 in
+		-s|--show) clip=0; shift ;;
 		-c|--clip) clip=1; clip_location="${2:-1}"; shift 2 ;;
+		-e|--extended-clip) clip=2; clip_location="${2:-1}"; shift 2;;
 		--) shift; break ;;
 	esac done
 
-	[[ $err -ne 0 ]] && die "Usage: $PROGRAM $COMMAND [--clip[=line-number],-c[line-number]] [pass-name]"
+	[[ $err -ne 0 ]] && die "Usage: $PROGRAM $COMMAND [--clip[=line-number] -c[line-number] -s --show -e[line-number] --exteded-clip[=line-number]] [pass-name]"
 
 	local path="$1"
 	local passfile="$PREFIX/$path.gpg"
@@ -314,8 +328,12 @@ cmd_show() {
 			$GPG -d "${GPG_OPTS[@]}" "$passfile" || exit $?
 		else
 			[[ $clip_location =~ ^[0-9]+$ ]] || die "Clip location '$clip_location' is not a number."
-			local pass="$($GPG -d "${GPG_OPTS[@]}" "$passfile" | tail -n +${clip_location} | head -n 1)"
+			local content="$($GPG -d "${GPG_OPTS[@]}" "$passfile")"
+			local pass="$(echo "$content" | tail -n +${clip_location} | head -n 1)"
 			[[ -n $pass ]] || die "There is no password to put on the clipboard at line ${clip_location}."
+			if [[ $clip -eq 2 ]]; then
+			  echo "$content" | sed ${clip_location}d
+			fi
 			clip "$pass" "$path"
 		fi
 	elif [[ -d $PREFIX/$path ]]; then
